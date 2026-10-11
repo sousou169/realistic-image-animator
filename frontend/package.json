@@ -1,0 +1,112 @@
+import os
+import shutil
+import subprocess
+import uuid
+from pathlib import Path
+
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+UPLOAD_DIR = BASE_DIR / "uploads"
+MEDIA_DIR = BASE_DIR / "generated"
+UPLOAD_DIR.mkdir(exist_ok=True, parents=True)
+MEDIA_DIR.mkdir(exist_ok=True, parents=True)
+
+app = FastAPI(title="Realistic Image Animator", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
+
+
+MOTION_FILTERS = {
+    "cinematic": "zoompan=z='min(zoom+0.0005,1.2)':d=1:s=1280x720,eq=saturation=1.2:contrast=1.1",
+    "dramatic": "zoompan=z='min(zoom+0.001,1.35)':d=1:s=1280x720,eq=saturation=1.4:contrast=1.2",
+    "subtle": "zoompan=z='min(zoom+0.0002,1.08)':d=1:s=1280x720,eq=saturation=1.1:contrast=1.05",
+    "product": "zoompan=z='min(zoom+0.0004,1.12)':d=1:s=1280x720,eq=saturation=1.15:contrast=1.08",
+}
+
+
+def _safe_file_name(filename: str) -> str:
+    cleaned = filename.replace(" ", "_")
+    return cleaned if cleaned else f"image_{uuid.uuid4().hex}"
+
+
+def _build_local_demo_video(input_path: Path, duration: int, motion_style: str) -> Path:
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("FFmpeg is not installed or not on PATH.")
+
+    output_path = MEDIA_DIR / f"animated_{uuid.uuid4().hex}.mp4"
+    motion_filter = MOTION_FILTERS.get(motion_style, MOTION_FILTERS["cinematic"])
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-loop",
+        "1",
+        "-t",
+        str(duration),
+        "-i",
+        str(input_path),
+        "-vf",
+        f"fps=24,scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,{motion_filter},format=yuv420p",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        str(output_path),
+    ]
+
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    return output_path
+
+
+@app.get("/api/health")
+def health_check():
+    return {"status": "ok", "service": "realistic-image-animator"}
+
+
+@app.post("/api/generate")
+async def generate_video(
+    prompt: str = Form(...),
+    duration: int = Form(30),
+    motion: str = Form("cinematic"),
+    image: UploadFile = File(...),
+):
+    if not image.filename:
+        raise HTTPException(status_code=400, detail="An image file is required.")
+
+    if duration < 5 or duration > 60:
+        raise HTTPException(status_code=400, detail="Duration must be between 5 and 60 seconds.")
+
+    input_path = UPLOAD_DIR / _safe_file_name(image.filename)
+    with input_path.open("wb") as file_obj:
+        shutil.copyfileobj(image.file, file_obj)
+
+    try:
+        output_path = _build_local_demo_video(input_path, duration, motion)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Video generation failed: {str(exc)}") from exc
+
+    media_url = f"http://localhost:8000/media/{output_path.name}"
+    return {
+        "status": "completed",
+        "source": "local_ffmpeg_demo",
+        "video_url": media_url,
+        "duration": duration,
+        "motion": motion,
+        "prompt": prompt,
+    }
+
+
+@app.get("/")
+def root():
+    return {"message": "Realistic image animation API is running."}

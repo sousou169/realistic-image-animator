@@ -1,0 +1,151 @@
+import { useMemo, useState } from 'react';
+
+const defaultPrompt =
+  'Ultra realistic cinematic image animation, subtle camera drift, natural parallax, realistic lighting, atmospheric motion, photorealistic textures, 30-second video, smooth temporal continuity.';
+
+function App() {
+  const [prompt, setPrompt] = useState(defaultPrompt);
+  const [duration, setDuration] = useState(30);
+  const [motion, setMotion] = useState('cinematic');
+  const [imageFile, setImageFile] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [result, setResult] = useState(null);
+
+  const imagePreview = useMemo(() => {
+    if (!imageFile) return '';
+    return URL.createObjectURL(imageFile);
+  }, [imageFile]);
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+
+    if (!imageFile) {
+      setError('Please choose an image before generating.');
+      return;
+    }
+
+    setError('');
+    setIsLoading(true);
+    setResult(null);
+
+    const formData = new FormData();
+    formData.append('prompt', prompt);
+    formData.append('duration', String(duration));
+    formData.append('motion', motion);
+    formData.append('image', imageFile);
+
+    try {
+      const response = await fetch('http://localhost:8000/api/generate', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Generation failed.');
+      }
+
+      const data = await response.json();
+      setResult(data);
+      setPreviewUrl(data.video_url || '');
+    } catch (submitError) {
+      setError(submitError.message || 'Something went wrong.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="app-shell">
+      <div className="panel-header">
+        <div>
+          <p className="eyebrow">Seedance 2.5 ready</p>
+          <h1>Realistic Image Animator</h1>
+        </div>
+        <div className="badge">30s</div>
+      </div>
+
+      <div className="layout-grid">
+        <section className="panel control-panel">
+          <form onSubmit={handleSubmit}>
+            <label className="field">
+              <span>Upload image</span>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(event) => setImageFile(event.target.files?.[0] || null)}
+              />
+            </label>
+
+            <label className="field">
+              <span>Animation prompt</span>
+              <textarea
+                value={prompt}
+                onChange={(event) => setPrompt(event.target.value)}
+                rows={6}
+              />
+            </label>
+
+            <div className="split-row">
+              <label className="field inline-field">
+                <span>Duration</span>
+                <input
+                  type="number"
+                  min="5"
+                  max="60"
+                  value={duration}
+                  onChange={(event) => setDuration(Number(event.target.value) || 30)}
+                />
+              </label>
+
+              <label className="field inline-field">
+                <span>Motion</span>
+                <select value={motion} onChange={(event) => setMotion(event.target.value)}>
+                  <option value="cinematic">Cinematic</option>
+                  <option value="dramatic">Dramatic</option>
+                  <option value="subtle">Subtle</option>
+                  <option value="product">Product</option>
+                </select>
+              </label>
+            </div>
+
+            <button type="submit" className="primary-button" disabled={isLoading}>
+              {isLoading ? 'Generating…' : 'Generate 30s video'}
+            </button>
+          </form>
+
+          {error && <div className="feedback error">{error}</div>}
+        </section>
+
+        <section className="panel output-panel">
+          {imagePreview ? (
+            <div className="preview-stack">
+              <img src={imagePreview} alt="Selected preview" className="image-preview" />
+            </div>
+          ) : (
+            <div className="empty-state">
+              <p>Upload an image to start</p>
+            </div>
+          )}
+
+          {result && (
+            <div className="result-card">
+              <div className="result-meta">
+                <span>{result.source}</span>
+                <span>{result.duration}s</span>
+              </div>
+              <video controls src={result.video_url} className="generated-video" />
+              <a href={result.video_url} target="_blank" rel="noreferrer" className="download-link">
+                Download video
+              </a>
+            </div>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+export default App;
