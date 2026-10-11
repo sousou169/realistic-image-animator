@@ -1,151 +1,310 @@
-import { useMemo, useState } from 'react';
-
-const defaultPrompt =
-  'Ultra realistic cinematic image animation, subtle camera drift, natural parallax, realistic lighting, atmospheric motion, photorealistic textures, 30-second video, smooth temporal continuity.';
-
-function App() {
-  const [prompt, setPrompt] = useState(defaultPrompt);
-  const [duration, setDuration] = useState(30);
-  const [motion, setMotion] = useState('cinematic');
-  const [imageFile, setImageFile] = useState(null);
-  const [previewUrl, setPreviewUrl] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [result, setResult] = useState(null);
-
-  const imagePreview = useMemo(() => {
-    if (!imageFile) return '';
-    return URL.createObjectURL(imageFile);
-  }, [imageFile]);
-
-  const handleSubmit = async (event) => {
-    event.preventDefault();
-
-    if (!imageFile) {
-      setError('Please choose an image before generating.');
-      return;
-    }
-
-    setError('');
-    setIsLoading(true);
-    setResult(null);
-
-    const formData = new FormData();
-    formData.append('prompt', prompt);
-    formData.append('duration', String(duration));
-    formData.append('motion', motion);
-    formData.append('image', imageFile);
-
-    try {
-      const response = await fetch('http://localhost:8000/api/generate', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || 'Generation failed.');
-      }
-
-      const data = await response.json();
-      setResult(data);
-      setPreviewUrl(data.video_url || '');
-    } catch (submitError) {
-      setError(submitError.message || 'Something went wrong.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  return (
-    <div className="app-shell">
-      <div className="panel-header">
-        <div>
-          <p className="eyebrow">Seedance 2.5 ready</p>
-          <h1>Realistic Image Animator</h1>
-        </div>
-        <div className="badge">30s</div>
-      </div>
-
-      <div className="layout-grid">
-        <section className="panel control-panel">
-          <form onSubmit={handleSubmit}>
-            <label className="field">
-              <span>Upload image</span>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(event) => setImageFile(event.target.files?.[0] || null)}
-              />
-            </label>
-
-            <label className="field">
-              <span>Animation prompt</span>
-              <textarea
-                value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
-                rows={6}
-              />
-            </label>
-
-            <div className="split-row">
-              <label className="field inline-field">
-                <span>Duration</span>
-                <input
-                  type="number"
-                  min="5"
-                  max="60"
-                  value={duration}
-                  onChange={(event) => setDuration(Number(event.target.value) || 30)}
-                />
-              </label>
-
-              <label className="field inline-field">
-                <span>Motion</span>
-                <select value={motion} onChange={(event) => setMotion(event.target.value)}>
-                  <option value="cinematic">Cinematic</option>
-                  <option value="dramatic">Dramatic</option>
-                  <option value="subtle">Subtle</option>
-                  <option value="product">Product</option>
-                </select>
-              </label>
-            </div>
-
-            <button type="submit" className="primary-button" disabled={isLoading}>
-              {isLoading ? 'Generating…' : 'Generate 30s video'}
-            </button>
-          </form>
-
-          {error && <div className="feedback error">{error}</div>}
-        </section>
-
-        <section className="panel output-panel">
-          {imagePreview ? (
-            <div className="preview-stack">
-              <img src={imagePreview} alt="Selected preview" className="image-preview" />
-            </div>
-          ) : (
-            <div className="empty-state">
-              <p>Upload an image to start</p>
-            </div>
-          )}
-
-          {result && (
-            <div className="result-card">
-              <div className="result-meta">
-                <span>{result.source}</span>
-                <span>{result.duration}s</span>
-              </div>
-              <video controls src={result.video_url} className="generated-video" />
-              <a href={result.video_url} target="_blank" rel="noreferrer" className="download-link">
-                Download video
-              </a>
-            </div>
-          )}
-        </section>
-      </div>
-    </div>
-  );
+:root {
+  color-scheme: dark;
+  --bg: #07111e;
+  --bg-2: #0d1a2b;
+  --panel: rgba(15, 23, 42, 0.9);
+  --panel-strong: rgba(17, 24, 39, 0.96);
+  --surface: rgba(30, 41, 59, 0.72);
+  --border: rgba(148, 163, 184, 0.2);
+  --text: #edf6ff;
+  --muted: #a4b5cf;
+  --accent: #8b5cf6;
+  --accent-2: #22d3ee;
+  --success: #34d399;
+  --warn: #fbbf24;
+  --danger: #f87171;
+  --shadow: rgba(2, 6, 23, 0.55);
 }
 
-export default App;
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  min-height: 100%;
+  height: 100%;
+  font-family: Inter, 'Segoe UI', sans-serif;
+  background:
+    radial-gradient(circle at 10% 10%, rgba(139, 92, 246, 0.25), transparent 25%),
+    radial-gradient(circle at 90% 10%, rgba(34, 211, 238, 0.18), transparent 28%),
+    linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
+  color: var(--text);
+}
+
+body {
+  min-height: 100vh;
+}
+
+button, input, select, textarea {
+  font: inherit;
+}
+
+img, video {
+  max-width: 100%;
+  display: block;
+}
+
+.page-shell {
+  max-width: 1220px;
+  margin: 0 auto;
+  padding: 40px 20px 80px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.eyebrow,
+.kicker {
+  margin: 0 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 11px;
+  color: var(--accent-2);
+}
+
+h1, h2 {
+  margin: 0;
+}
+
+h1 {
+  font-size: clamp(2.2rem, 4vw, 3.7rem);
+  letter-spacing: -0.04em;
+}
+
+h2 {
+  font-size: clamp(1.25rem, 2vw, 1.8rem);
+}
+
+.topbar-pill {
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(167, 139, 250, 0.5);
+  background: rgba(139, 92, 246, 0.12);
+  color: #e9d5ff;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(330px, 420px) minmax(300px, 1fr);
+  gap: 24px;
+}
+
+.panel {
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(15, 23, 42, 0.9));
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  box-shadow: 0 20px 48px var(--shadow);
+  padding: 22px;
+}
+
+.panel-heading,
+.preview-header {
+  margin-bottom: 18px;
+}
+
+.generator-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--muted);
+}
+
+.field span {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.upload-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 66px;
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.5);
+  border-radius: 14px;
+  padding: 12px;
+}
+
+input[type='file'],
+input, select, textarea {
+  width: 100%;
+  background: rgba(15, 23, 42, 0.72);
+  color: var(--text);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 150px;
+  line-height: 1.5;
+}
+
+.control-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.primary-button {
+  width: 100%;
+  border: none;
+  border-radius: 14px;
+  padding: 15px 18px;
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 12px 28px rgba(34, 211, 238, 0.22);
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.primary-button:hover {
+  transform: translateY(-1px);
+}
+
+.primary-button:disabled {
+  opacity: 0.8;
+  cursor: wait;
+}
+
+.notice {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-size: 0.92rem;
+}
+
+.notice.error {
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  color: #fecaca;
+}
+
+.preview-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.preview-card,
+.result-card {
+  width: 100%;
+  background: rgba(15, 23, 42, 0.4);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+.image-preview {
+  width: 100%;
+  max-height: 420px;
+  object-fit: cover;
+}
+
+.empty-state {
+  min-height: 380px;
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  border: 1px dashed rgba(148, 163, 184, 0.3);
+  border-radius: 18px;
+  background: rgba(15, 23, 42, 0.32);
+  color: var(--muted);
+}
+
+.empty-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 2rem;
+  background: rgba(139, 92, 246, 0.14);
+  color: var(--accent-2);
+}
+
+.result-card {
+  padding: 14px;
+}
+
+.result-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(52, 211, 153, 0.1);
+  border: 1px solid rgba(52, 211, 153, 0.25);
+  color: #d1fae5;
+}
+
+.generated-video {
+  width: 100%;
+  min-height: 260px;
+  border-radius: 14px;
+  background: rgba(2, 6, 23, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.result-actions {
+  margin-top: 14px;
+}
+
+.download-link {
+  display: inline-block;
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: none;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(139, 92, 246, 0.12);
+  border: 1px solid rgba(167, 139, 250, 0.28);
+}
+
+@media (max-width: 900px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .page-shell {
+    padding-top: 28px;
+  }
+}
+
+@media (max-width: 560px) {
+  .topbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .control-grid {
+    grid-template-columns: 1fr;
+  }
+}
