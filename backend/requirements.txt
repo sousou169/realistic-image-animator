@@ -1,71 +1,200 @@
-# realistic-image-animator
+import json
+import os
+import shutil
+import subprocess
+import uuid
+from pathlib import Path
 
-A modern web app that turns a still image into a short cinematic 30-second animation with a polished upload workflow and a local high-quality demo renderer.
+import httpx
+from dotenv import load_dotenv
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
-This project is built as a starter foundation for integrating a model like Seedance 2.5 while also working out of the box using a local FFmpeg-based animation engine for prototype testing.
+load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")
 
-## Features
+BASE_DIR = Path(__file__).resolve().parents[1]
+UPLOAD_DIR = BASE_DIR / "uploads"
+MEDIA_DIR = BASE_DIR / "generated"
+UPLOAD_DIR.mkdir(exist_ok=True, parents=True)
+MEDIA_DIR.mkdir(exist_ok=True, parents=True)
 
-- Upload a still image
-- Choose motion style: cinematic, dramatic, subtle, product
-- Generate a 30-second preview video
-- Preview directly in the browser
-- Built-in backend API for image-to-video generation
-- Ready for Seedance 2.5 API integration
+SEEDANCE_API_URL = os.getenv("SEEDANCE_API_URL", "").strip()
+SEEDANCE_API_KEY = os.getenv("SEEDANCE_API_KEY", "").strip()
 
-## Tech stack
+app = FastAPI(title="Realistic Image Animator", version="1.0.0")
 
-- Frontend: React + Vite + Tailwind-inspired CSS
-- Backend: FastAPI
-- Video rendering: FFmpeg
-- Optional integration: Seedance 2.5 API via environment variables
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-## Local setup
+app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
 
-### 1) Backend
+MOTION_FILTERS = {
+    "cinematic": "zoompan=z='min(zoom+0.0005,1.2)':d=1:s=1280x720,eq=saturation=1.2:contrast=1.1",
+    "dramatic": "zoompan=z='min(zoom+0.001,1.35)':d=1:s=1280x720,eq=saturation=1.4:contrast=1.2",
+    "subtle": "zoompan=z='min(zoom+0.0002,1.08)':d=1:s=1280x720,eq=saturation=1.1:contrast=1.05",
+    "product": "zoompan=z='min(zoom+0.0004,1.12)':d=1:s=1280x720,eq=saturation=1.15:contrast=1.08",
+}
 
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
 
-### 2) Frontend
+def _safe_file_name(filename: str) -> str:
+    cleaned = filename.replace(" ", "_")
+    return cleaned if cleaned else f"image_{uuid.uuid4().hex}"
 
-```bash
-cd frontend
-npm install
-npm run dev -- --host 0.0.0.0 --port 5173
-```
 
-### 3) Open the app
+def _extract_seedance_video_url(payload: dict):
+    if isinstance(payload, dict):
+        for key in [
+            "video_url",
+            "output_url",
+            "download_url",
+            "url",
+            "result_url",
+            "final_url",
+            "video",
+        ]:
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                return value
 
-Visit:
+        nested = payload.get("data")
+        if isinstance(nested, dict):
+            return _extract_seedance_video_url(nested)
+        if isinstance(nested, list):
+            for item in nested:
+                if isinstance(item, dict):
+                    result = _extract_seedance_video_url(item)
+                    if result:
+                        return result
 
-```text
-http://localhost:5173
-```
+        result = payload.get("result")
+        if isinstance(result, dict):
+            return _extract_seedance_video_url(result)
 
-## Example prompt
+    return None
 
-```text
-Ultra realistic cinematic image animation, subtle camera movement, natural parallax, realistic lighting, soft atmospheric motion, photorealistic textures, 30-second video, high detail, smooth temporal continuity.
-```
 
-## Optional Seedance 2.5 API setup
+async def _generate_with_seedance(prompt: str, duration: int, motion: str, image_path: Path):
+    if not SEEDANCE_API_URL:
+        raise RuntimeError("SEEDANCE_API_URL is not configured.")
 
-Create a `.env` file in the backend directory with:
+    headers = {}
+    if SEEDANCE_API_KEY:
+        headers["Authorization"] = f"Bearer {SEEDANCE_API_KEY}"
 
-```bash
-SEEDANCE_API_KEY=your_key_here
-SEEDANCE_API_URL=https://your-model-endpoint.example.com
-```
+    payload = {
+        "prompt": prompt,
+        "duration": str(duration),
+        "motion": motion,
+        "user_prompt": prompt,
+    }
 
-The app will prefer the configured model endpoint when available, and fall back to the local FFmpeg renderer when it is not configured.
+    with image_path.open("rb") as image_file:
+        image_bytes = image_file.read()
 
-## Notes
+    files = {"image": (image_path.name, image_bytes, "image/*")}
 
-- The local demo mode is suitable for rapid prototyping and testing UI/flow.
-- For production-quality model generation, connect a real Seedance 2.5 compatible API and replace the local renderer with the model call in the backend generation logic.
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        response = await client.post(SEEDANCE_API_URL, data=payload, files=files, headers=headers)
+
+    if response.status_code >= 400:
+        text = response.text.strip()
+        raise RuntimeError(f"Seedance API request failed ({response.status_code}): {text[:200]}")
+
+    try:
+        data = response.json()
+    except ValueError:
+        data = {"raw": response.text}
+
+    video_url = _extract_seedance_video_url(data)
+    if not video_url:
+        raise RuntimeError("Seedance API responded without a usable video URL.")
+
+    return {
+        "status": "completed",
+        "source": "seedance_2_5",
+        "video_url": video_url,
+        "duration": duration,
+        "motion": motion,
+        "prompt": prompt,
+    }
+
+
+def _build_local_demo_video(input_path: Path, duration: int, motion_style: str) -> Path:
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("FFmpeg is not installed or not on PATH.")
+
+    output_path = MEDIA_DIR / f"animated_{uuid.uuid4().hex}.mp4"
+    motion_filter = MOTION_FILTERS.get(motion_style, MOTION_FILTERS["cinematic"])
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-loop",
+        "1",
+        "-t",
+        str(duration),
+        "-i",
+        str(input_path),
+        "-vf",
+        f"fps=24,scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,{motion_filter},format=yuv420p",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        str(output_path),
+    ]
+
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    return output_path
+
+
+@app.get("/api/health")
+def health_check():
+    return {"status": "ok", "service": "realistic-image-animator", "seedance_configured": bool(SEEDANCE_API_URL)}
+
+
+@app.post("/api/generate")
+async def generate_video(
+    prompt: str = Form(...),
+    duration: int = Form(30),
+    motion: str = Form("cinematic"),
+    image: UploadFile = File(...),
+):
+    if not image.filename:
+        raise HTTPException(status_code=400, detail="An image file is required.")
+
+    if duration < 5 or duration > 60:
+        raise HTTPException(status_code=400, detail="Duration must be between 5 and 60 seconds.")
+
+    input_path = UPLOAD_DIR / _safe_file_name(image.filename)
+    with input_path.open("wb") as file_obj:
+        shutil.copyfileobj(image.file, file_obj)
+
+    try:
+        if SEEDANCE_API_URL:
+            result = await _generate_with_seedance(prompt, duration, motion, input_path)
+            return result
+
+        output_path = _build_local_demo_video(input_path, duration, motion)
+        media_url = f"http://localhost:8000/media/{output_path.name}"
+        return {
+            "status": "completed",
+            "source": "local_ffmpeg_demo",
+            "video_url": media_url,
+            "duration": duration,
+            "motion": motion,
+            "prompt": prompt,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Video generation failed: {str(exc)}") from exc
+
+
+@app.get("/")
+def root():
+    return {"message": "Realistic image animation API is running."}

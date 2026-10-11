@@ -1,5 +1,3 @@
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
-python-multipart==0.0.9
-pydantic==2.9.2
-httpx==0.27.2
+"""Realistic Image Animator backend package."""
+
+__all__ = ["app"]
